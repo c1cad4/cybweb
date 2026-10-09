@@ -1,0 +1,15 @@
+{
+  "upstream": "c1cad4/CybOS-demo",
+  "base_commit": "dddcd76d76bf1f8d26b07e3a761908bc1ea7966b",
+  "note": "Includes locally verified fixes authorized during cloud setup. Files now maintained in this repository.",
+  "files": [
+    {
+      "source": "src/network/web_html.rs",
+      "sha256": "8ba8addca6c7a6fdc57b73fd9c310746f92440eb62dc15b7000168d432b479c1"
+    },
+    {
+      "source": "src/network/web_urls.rs",
+      "sha256": "d5d9d6be87db9f801e1c05377af083a450862382d3630506cdb6ce244c73a590"
+    }
+  ]
+}

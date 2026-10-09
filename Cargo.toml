@@ -1,0 +1,9 @@
+[package]
+name = "cyb-web"
+version = "0.1.0"
+edition = "2024"
+description = "cybweb component of the cybOS ecosystem"
+repository = "https://github.com/c1cad4/cybweb"
+publish = false
+
+[dependencies]
