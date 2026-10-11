@@ -1,5 +1,53 @@
 //! URL extraction and source ranking for web search results.
 
+// Only a bounded authority hostname can confer official-source priority.
+// This is ranking, not URL normalization or browser navigation validation.
+fn hostname(url: &str) -> Option<&str> {
+    let authority = url.split_once("://")?.1.split(['/', '?', '#']).next()?;
+    if authority.contains('\\')
+        || authority
+            .chars()
+            .any(|c| c.is_whitespace() || c.is_control())
+    {
+        return None;
+    }
+    let authority = authority.rsplit('@').next()?;
+    // IPv6 addresses cannot match the domain names used by this ranker.
+    if authority.starts_with('[') {
+        return None;
+    }
+    let host = if let Some((host, port)) = authority.split_once(':') {
+        port.parse::<u16>().ok()?;
+        host
+    } else {
+        authority
+    };
+    let host = host.strip_suffix('.').unwrap_or(host);
+    if host.is_empty() { None } else { Some(host) }
+}
+
+fn domain_matches(host: Option<&str>, domain: &str) -> bool {
+    host.is_some_and(|host| {
+        host == domain
+            || host
+                .strip_suffix(domain)
+                .is_some_and(|prefix| prefix.ends_with('.'))
+    })
+}
+
+fn url_path(url: &str) -> &str {
+    let Some((_, rest)) = url.split_once("://") else {
+        return "";
+    };
+    let boundary = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    let suffix = &rest[boundary..];
+    if suffix.starts_with('/') {
+        suffix.split(['?', '#']).next().unwrap_or("")
+    } else {
+        ""
+    }
+}
+
 pub fn web_urls_from_result(result: &str) -> Vec<String> {
     let mut scored: Vec<(i32, String)> = Vec::new();
     let mut current_title = String::new();
@@ -27,20 +75,23 @@ pub fn web_urls_from_result(result: &str) -> Vec<String> {
         let title = current_title.to_lowercase();
         let url_lower = url.to_lowercase();
 
+        let host = hostname(&url_lower);
+        let path = url_path(&url_lower);
+        let government = domain_matches(host, "government.ru");
         let mut score = 0i32;
 
         // Primary official sources first.
-        if url_lower.contains("publication.pravo.gov.ru") {
+        if domain_matches(host, "publication.pravo.gov.ru") {
             score += 150;
         }
 
-        if url_lower.contains("pravo.gov.ru") {
+        if domain_matches(host, "pravo.gov.ru") {
             score += 130;
         }
 
-        if url_lower.contains("government.ru/docs/all/") {
+        if government && path.starts_with("/docs/all/") {
             score += 120;
-        } else if url_lower.contains("government.ru") {
+        } else if government {
             score += 90;
         }
 
@@ -54,7 +105,7 @@ pub fn web_urls_from_result(result: &str) -> Vec<String> {
         }
 
         // Legal databases.
-        if url_lower.contains("consultant.ru") || url_lower.contains("garant.ru") {
+        if domain_matches(host, "consultant.ru") || domain_matches(host, "garant.ru") {
             score += 50;
         }
 
@@ -81,11 +132,11 @@ pub fn web_urls_from_result(result: &str) -> Vec<String> {
         }
 
         // Generic catalog/index pages must lose.
-        if url_lower == "https://government.ru/docs" || url_lower == "https://government.ru/docs/" {
+        if government && matches!(path, "/docs" | "/docs/") && !url_lower.contains('?') {
             score -= 150;
         }
 
-        if url_lower.contains("government.ru/docs?") {
+        if government && path == "/docs" && url_lower.contains('?') {
             score -= 80;
         }
 
@@ -119,5 +170,41 @@ mod tests {
                 "https://government.ru/docs"
             ]
         );
+    }
+    #[test]
+    fn official_priority_uses_hostname_not_url_substrings() {
+        for fake in [
+            "https://government.ru.evil.test/docs/all/123",
+            "https://evilgovernment.ru/docs/all/123",
+            "https://evil.test\\@government.ru/docs/all/123",
+            "https://evil.test/government.ru/docs/all/123",
+            "https://evil.test/?source=publication.pravo.gov.ru",
+            "https://publication.pravo.gov.ru@evil.test/document/123",
+            "https://evil.test/?source=consultant.ru&backup=garant.ru",
+        ] {
+            let input = format!(
+                "1. Untrusted\nURL: {fake}\n2. Official\nURL: https://government.ru/news/123"
+            );
+            assert_eq!(
+                web_urls_from_result(&input)[0],
+                "https://government.ru/news/123",
+                "{fake}"
+            );
+        }
+    }
+
+    #[test]
+    fn official_hosts_support_case_ports_subdomains_and_dns_root_dot() {
+        for official in [
+            "https://PUBLICATION.PRAVO.GOV.RU/document/123",
+            "https://publication.pravo.gov.ru:443/document/123",
+            "https://publication.pravo.gov.ru./document/123",
+            "https://news.government.ru/docs/all/123",
+        ] {
+            let input = format!(
+                "1. Document\nURL: https://example.test/doc/123\n2. Official\nURL: {official}"
+            );
+            assert_eq!(web_urls_from_result(&input)[0], official);
+        }
     }
 }
